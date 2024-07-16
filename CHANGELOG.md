@@ -1,3 +1,8 @@
+# 10.1.1025
+
+## Bugfixes
+- The argument `--show-errors` not works in `scan` method exposed via library.
+
 # 10.1.1024
 
 ## Features
