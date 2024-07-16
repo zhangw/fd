@@ -782,11 +782,16 @@ pub fn scan_and_collect(
     state.spawn_senders(walker, tx);
 
     let mut entries = Vec::new();
+    let show_fs_errors = state.config.show_filesystem_errors;
     for batch in rx {
         for result in batch {
             match result {
                 WorkerResult::Entry(entry) => entries.push(entry),
-                WorkerResult::Error(err) => print_error(err.to_string()),
+                WorkerResult::Error(err) => {
+                    if show_fs_errors {
+                        print_error(err.to_string());
+                    }
+                }
             }
         }
     }

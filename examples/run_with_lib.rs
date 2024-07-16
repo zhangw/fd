@@ -7,7 +7,7 @@ use fd_lib::filter::SizeFilter;
 use fd_lib::scan;
 
 pub fn main() {
-    let mut opts = Opts::parse();
+    let mut opts = Opts::parse_from(vec![""]);
     // --show-progress
     opts.show_progress = true;
     // -I
