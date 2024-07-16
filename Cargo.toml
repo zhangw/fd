@@ -16,7 +16,9 @@ license = "MIT OR Apache-2.0"
 name = "fd-find-enhance"
 readme = "README.md"
 repository = "https://github.com/zhangw/fd"
-version = "10.1.0"
+# forked from https://github.com/sharkdp/fd, the init version was 10.1.0
+# now only change the patch number by 1024 as the offset, so our first release version can be 10.1.1024
+version = "10.1.1024"
 edition= "2021"
 rust-version = "1.77.2"
 
@@ -29,6 +31,10 @@ repository = "zhangw/fd"
 [[bin]]
 name = "fd"
 path = "src/main.rs"
+
+[lib]
+name = "fd_lib"
+path = "src/lib.rs"
 
 [build-dependencies]
 version_check = "0.9"

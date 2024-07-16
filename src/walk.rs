@@ -308,7 +308,9 @@ struct WorkerState {
     quit_flag: Arc<AtomicBool>,
     /// Flag specifically for quitting due to ^C
     interrupt_flag: Arc<AtomicBool>,
+    /// Flag for quitting the progress bar
     quit_progress_flag: Arc<AtomicBool>,
+    /// Total number of directory entries scanned
     total_dnt_scanned: Arc<AtomicUsize>,
 }
 
@@ -668,6 +670,34 @@ impl WorkerState {
 
         let (tx, rx) = bounded(2 * config.threads);
 
+        let show_progress = self.create_show_progress_handler();
+
+        let exit_code = thread::scope(|scope| {
+            // Spawn the receiver thread(s)
+            let receiver = scope.spawn(|| self.receive(rx));
+
+            // Spawn the sender threads.
+            self.spawn_senders(walker, tx);
+
+            // Wait for the receiver thread to finish
+            let recv_join_result = receiver.join().unwrap();
+
+            self.quit_progress_flag.store(true, Ordering::Relaxed);
+
+            recv_join_result
+        });
+
+        wait_show_progress_handle(show_progress);
+
+        if self.interrupt_flag.load(Ordering::Relaxed) {
+            Ok(ExitCode::KilledBySigint)
+        } else {
+            Ok(exit_code)
+        }
+    }
+
+    fn create_show_progress_handler(&self) -> Option<thread::JoinHandle<()>> {
+        let config = &self.config;
         let show_progress = match config.show_progress {
             true => {
                 let threads_len = config.threads;
@@ -714,33 +744,15 @@ impl WorkerState {
             }
             _ => None,
         };
+        show_progress
+    }
+}
 
-        let exit_code = thread::scope(|scope| {
-            // Spawn the receiver thread(s)
-            let receiver = scope.spawn(|| self.receive(rx));
-
-            // Spawn the sender threads.
-            self.spawn_senders(walker, tx);
-
-            // Wait for the receiver thread to finish
-            let recv_join_result = receiver.join().unwrap();
-
-            self.quit_progress_flag.store(true, Ordering::Relaxed);
-
-            recv_join_result
-        });
-
-        // Wait for the progress bar thread to finish
-        match show_progress {
-            Some(show_progress_handle) => show_progress_handle.join().unwrap(),
-            _ => {}
-        }
-
-        if self.interrupt_flag.load(Ordering::Relaxed) {
-            Ok(ExitCode::KilledBySigint)
-        } else {
-            Ok(exit_code)
-        }
+fn wait_show_progress_handle(show_progress: Option<thread::JoinHandle<()>>) {
+    // Wait for the progress bar thread to finish
+    match show_progress {
+        Some(show_progress_handle) => show_progress_handle.join().unwrap(),
+        _ => {}
     }
 }
 
@@ -751,4 +763,35 @@ impl WorkerState {
 /// path will simply be written to standard output.
 pub fn scan(paths: &[PathBuf], patterns: Vec<Regex>, config: Config) -> Result<ExitCode> {
     WorkerState::new(patterns, config).scan(paths)
+}
+
+/// Recursively scan the given search path for files / pathnames matching the patterns and collect the results.
+/// Usefull for testing and other cases such as library usage.
+#[allow(unused)]
+pub fn scan_and_collect(
+    paths: &[PathBuf],
+    patterns: Vec<Regex>,
+    config: Config,
+) -> Result<Vec<DirEntry>> {
+    let state = WorkerState::new(patterns, config);
+    let walker = state.build_walker(paths)?;
+    let (tx, rx) = bounded(2 * state.config.threads);
+
+    let show_progress = state.create_show_progress_handler();
+
+    state.spawn_senders(walker, tx);
+
+    let mut entries = Vec::new();
+    for batch in rx {
+        for result in batch {
+            match result {
+                WorkerResult::Entry(entry) => entries.push(entry),
+                WorkerResult::Error(err) => print_error(err.to_string()),
+            }
+        }
+    }
+    state.quit_progress_flag.store(true, Ordering::Relaxed);
+    wait_show_progress_handle(show_progress);
+
+    Ok(entries)
 }

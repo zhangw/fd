@@ -613,7 +613,7 @@ pub struct Opts {
         help = "the root directories for the filesystem search (optional)",
         long_help,
         )]
-    path: Vec<PathBuf>,
+    pub path: Vec<PathBuf>,
 
     /// Provide paths to search as an alternative to the positional <path>
     /// argument. Changes the usage to `fd [OPTIONS] --search-path <path>

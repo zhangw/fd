@@ -1,3 +1,11 @@
+# 10.1.0.1024
+
+## Features
+
+- Publish the lib named as 'fd_lib' that help to integrate this tool into other project.
+
+- Allow showing a progress bar during scanning, the progress bar is a simple implementation by individual local cache counter for each threads and a global counter, then introduce the crate *indicatif* to draw the progress bar.
+
 # 10.1.0
 
 ## Features
