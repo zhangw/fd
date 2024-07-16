@@ -126,6 +126,9 @@ pub struct Config {
 
     /// Whether or not to strip the './' prefix for search results
     pub strip_cwd_prefix: bool,
+
+    /// Whether or not to show progress that indicates how many dir entries have been scanned
+    pub show_progress: bool,
 }
 
 impl Config {

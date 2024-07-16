@@ -636,6 +636,15 @@ pub struct Opts {
     #[arg(long, conflicts_with_all(&["path", "search_path"]), value_name = "when", hide_short_help = true, require_equals = true, long_help)]
     strip_cwd_prefix: Option<Option<StripCwdWhen>>,
 
+    #[arg(
+        long,
+        hide_short_help = true,
+        conflicts_with("quiet"),
+        help = "Show progress indicator",
+        long_help
+    )]
+    pub show_progress: bool,
+
     /// By default, fd will traverse the file system tree as far as other options
     /// dictate. With this flag, fd ensures that it does not descend into a
     /// different file system than the one it started in. Comparable to the -mount

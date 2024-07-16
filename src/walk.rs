@@ -3,9 +3,9 @@ use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::mem;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread;
+use std::thread::{self};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -13,6 +13,7 @@ use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, SendError, Sender};
 use etcetera::BaseStrategy;
 use ignore::overrides::{Override, OverrideBuilder};
 use ignore::{WalkBuilder, WalkParallel, WalkState};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use regex::bytes::Regex;
 
 use crate::config::Config;
@@ -307,18 +308,24 @@ struct WorkerState {
     quit_flag: Arc<AtomicBool>,
     /// Flag specifically for quitting due to ^C
     interrupt_flag: Arc<AtomicBool>,
+    quit_progress_flag: Arc<AtomicBool>,
+    total_dnt_scanned: Arc<AtomicUsize>,
 }
 
 impl WorkerState {
     fn new(patterns: Vec<Regex>, config: Config) -> Self {
         let quit_flag = Arc::new(AtomicBool::new(false));
         let interrupt_flag = Arc::new(AtomicBool::new(false));
+        let total_dnt_scanned = Arc::new(AtomicUsize::new(0));
+        let quit_progress_flag = Arc::new(AtomicBool::new(false));
 
         Self {
             patterns,
             config,
             quit_flag,
             interrupt_flag,
+            total_dnt_scanned,
+            quit_progress_flag,
         }
     }
 
@@ -442,6 +449,10 @@ impl WorkerState {
     /// Spawn the sender threads.
     fn spawn_senders(&self, walker: WalkParallel, tx: Sender<Batch>) {
         walker.run(|| {
+            let total_dnt_scanned = Arc::clone(&self.total_dnt_scanned);
+            let mut local_accumulated = 0;
+            let start_time = Instant::now();
+            let mut startup_counter_mode = true;
             let patterns = &self.patterns;
             let config = &self.config;
             let quit_flag = self.quit_flag.as_ref();
@@ -453,13 +464,30 @@ impl WorkerState {
                     limit = 1;
                 }
             }
-            let mut tx = BatchSender::new(tx.clone(), limit);
 
+            let mut tx = BatchSender::new(tx.clone(), limit);
             Box::new(move |entry| {
                 if quit_flag.load(Ordering::Relaxed) {
                     return WalkState::Quit;
                 }
-
+                if config.show_progress {
+                    if startup_counter_mode {
+                        let elapsed = start_time.elapsed();
+                        // TODO: 3 should be configurable
+                        if elapsed.as_secs() >= 3 {
+                            startup_counter_mode = false;
+                        }
+                        // Always counting but no accumulate
+                        total_dnt_scanned.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        local_accumulated += 1;
+                        // TODO: 100 as a random number, should be configurable
+                        if local_accumulated >= 100 {
+                            total_dnt_scanned.fetch_add(local_accumulated, Ordering::Relaxed);
+                            local_accumulated = 0;
+                        }
+                    }
+                }
                 let entry = match entry {
                     Ok(ref e) if e.depth() == 0 => {
                         // Skip the root directory entry.
@@ -496,7 +524,7 @@ impl WorkerState {
                         }
                     }
                 };
-
+                // thread_files_scanned_clone.fetch_add(1, Ordering::Relaxed);
                 if let Some(min_depth) = config.min_depth {
                     if entry.depth().map_or(true, |d| d < min_depth) {
                         return WalkState::Continue;
@@ -640,6 +668,53 @@ impl WorkerState {
 
         let (tx, rx) = bounded(2 * config.threads);
 
+        let show_progress = match config.show_progress {
+            true => {
+                let threads_len = config.threads;
+                Some({
+                    let m = MultiProgress::new();
+                    let quit_progress_flag = Arc::clone(&self.quit_progress_flag);
+                    let total_dnt_scanned = Arc::clone(&self.total_dnt_scanned);
+                    thread::spawn(move || {
+                        let mut progress_bars = Vec::new();
+                        let ps = ProgressStyle::default_bar()
+                            .template(
+                                "{spinner:.green} [{elapsed_precise}] [{bar:.cyan/blue}] {msg}",
+                            )
+                            .unwrap()
+                            .progress_chars("##-");
+                        let pb = m.add(ProgressBar::new(0));
+                        pb.set_style(ps);
+                        progress_bars.push(pb);
+
+                        let pb = &progress_bars[0];
+                        loop {
+                            let total_dnt_scanned = total_dnt_scanned.load(Ordering::Relaxed);
+                            // pb.set_length(total_dnt_scanned as u64);
+                            // pb.set_position(total_dnt_scanned as u64);
+                            pb.set_message(format!(
+                                "Scanning approximately {} dir entry with {} threads",
+                                total_dnt_scanned, threads_len
+                            ));
+
+                            if quit_progress_flag.load(Ordering::Relaxed) {
+                                break;
+                            }
+
+                            thread::sleep(Duration::from_millis(250));
+                        }
+
+                        let total_dnt_scanned = total_dnt_scanned.load(Ordering::Relaxed);
+                        pb.finish_with_message(format!(
+                            "Scanning complete, approximately {} dir entry with {} threads",
+                            total_dnt_scanned, threads_len
+                        ));
+                    })
+                })
+            }
+            _ => None,
+        };
+
         let exit_code = thread::scope(|scope| {
             // Spawn the receiver thread(s)
             let receiver = scope.spawn(|| self.receive(rx));
@@ -647,8 +722,19 @@ impl WorkerState {
             // Spawn the sender threads.
             self.spawn_senders(walker, tx);
 
-            receiver.join().unwrap()
+            // Wait for the receiver thread to finish
+            let recv_join_result = receiver.join().unwrap();
+
+            self.quit_progress_flag.store(true, Ordering::Relaxed);
+
+            recv_join_result
         });
+
+        // Wait for the progress bar thread to finish
+        match show_progress {
+            Some(show_progress_handle) => show_progress_handle.join().unwrap(),
+            _ => {}
+        }
 
         if self.interrupt_flag.load(Ordering::Relaxed) {
             Ok(ExitCode::KilledBySigint)
