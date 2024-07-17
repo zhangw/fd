@@ -457,6 +457,10 @@ impl WorkerState {
             let mut startup_counter_mode = true;
             let patterns = &self.patterns;
             let config = &self.config;
+            let local_cache_counter_threshold = config.local_cache_counter_threshold.unwrap_or(512);
+            let global_counter_duration_when_startup = config
+                .global_counter_duration_when_startup
+                .unwrap_or(Duration::from_millis(3000));
             let quit_flag = self.quit_flag.as_ref();
 
             let mut limit = 0x100;
@@ -475,16 +479,14 @@ impl WorkerState {
                 if config.show_progress {
                     if startup_counter_mode {
                         let elapsed = start_time.elapsed();
-                        // TODO: 3 should be configurable
-                        if elapsed.as_secs() >= 3 {
+                        if elapsed >= global_counter_duration_when_startup {
                             startup_counter_mode = false;
                         }
                         // Always counting but no accumulate
                         total_dnt_scanned.fetch_add(1, Ordering::Relaxed);
                     } else {
                         local_accumulated += 1;
-                        // TODO: 100 as a random number, should be configurable
-                        if local_accumulated >= 100 {
+                        if local_accumulated >= local_cache_counter_threshold {
                             total_dnt_scanned.fetch_add(local_accumulated, Ordering::Relaxed);
                             local_accumulated = 0;
                         }
@@ -698,6 +700,9 @@ impl WorkerState {
 
     fn create_show_progress_handler(&self) -> Option<thread::JoinHandle<()>> {
         let config = &self.config;
+        let interval = config
+            .show_progress_refresh_rate
+            .unwrap_or_else(|| Duration::from_millis(250));
         let show_progress = match config.show_progress {
             true => {
                 let threads_len = config.threads;
@@ -708,11 +713,9 @@ impl WorkerState {
                     thread::spawn(move || {
                         let mut progress_bars = Vec::new();
                         let ps = ProgressStyle::default_bar()
-                            .template(
-                                "{spinner:.green} [{elapsed_precise}] [{bar:.cyan/blue}] {msg}",
-                            )
+                            .template("{spinner:.cyan} [{elapsed_precise}] {pos:.green} {msg}")
                             .unwrap()
-                            .progress_chars("##-");
+                            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]);
                         let pb = m.add(ProgressBar::new(0));
                         pb.set_style(ps);
                         progress_bars.push(pb);
@@ -720,24 +723,22 @@ impl WorkerState {
                         let pb = &progress_bars[0];
                         loop {
                             let total_dnt_scanned = total_dnt_scanned.load(Ordering::Relaxed);
-                            // pb.set_length(total_dnt_scanned as u64);
-                            // pb.set_position(total_dnt_scanned as u64);
-                            pb.set_message(format!(
-                                "Scanning approximately {} dir entry with {} threads",
-                                total_dnt_scanned, threads_len
-                            ));
+                            pb.set_position(total_dnt_scanned as u64);
+                            pb.set_message(format!("Files scan with {} threads", threads_len));
 
                             if quit_progress_flag.load(Ordering::Relaxed) {
                                 break;
                             }
 
-                            thread::sleep(Duration::from_millis(250));
+                            thread::sleep(interval);
                         }
 
                         let total_dnt_scanned = total_dnt_scanned.load(Ordering::Relaxed);
+                        pb.set_position(total_dnt_scanned as u64);
+                        pb.set_length(total_dnt_scanned as u64);
                         pb.finish_with_message(format!(
-                            "Scanning complete, approximately {} dir entry with {} threads",
-                            total_dnt_scanned, threads_len
+                            "Files scan complete with {} threads",
+                            threads_len
                         ));
                     })
                 })

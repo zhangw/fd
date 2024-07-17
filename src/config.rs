@@ -129,6 +129,15 @@ pub struct Config {
 
     /// Whether or not to show progress that indicates how many dir entries have been scanned
     pub show_progress: bool,
+
+    /// The refresh rate of the progress bar
+    pub show_progress_refresh_rate: Option<Duration>,
+
+    /// For each worker thread, the local counter of scanned dir entries that triggers the update the global atomic counter
+    pub local_cache_counter_threshold: Option<usize>,
+
+    /// For each worker thread, the duration of time that always triggers the update the global atomic counter
+    pub global_counter_duration_when_startup: Option<Duration>,
 }
 
 impl Config {

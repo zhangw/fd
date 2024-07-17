@@ -1,3 +1,8 @@
+# 10.1.1026
+
+## Improvements
+- Progress bar style adjustment, and introduce some hidden arguments for progress bar
+
 # 10.1.1025
 
 ## Bugfixes

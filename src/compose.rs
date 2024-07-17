@@ -201,6 +201,9 @@ pub fn construct_config(mut opts: Opts, pattern_regexps: &[String]) -> Result<Co
         max_results: opts.max_results(),
         strip_cwd_prefix: opts.strip_cwd_prefix(|| !(opts.null_separator || has_command)),
         show_progress: opts.show_progress,
+        show_progress_refresh_rate: opts.show_progress_refresh_rate,
+        local_cache_counter_threshold: opts.local_cache_counter_threshold,
+        global_counter_duration_when_startup: opts.global_counter_duration_when_startup,
     })
 }
 

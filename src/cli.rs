@@ -645,6 +645,15 @@ pub struct Opts {
     )]
     pub show_progress: bool,
 
+    #[arg(long, value_parser = parse_millis, default_value = "250", hide = true)]
+    pub show_progress_refresh_rate: Option<Duration>,
+
+    #[arg(long, default_value = "512", hide = true)]
+    pub local_cache_counter_threshold: Option<usize>,
+
+    #[arg(long, value_parser = parse_millis, default_value = "3000", hide = true)]
+    pub global_counter_duration_when_startup: Option<Duration>,
+
     /// By default, fd will traverse the file system tree as far as other options
     /// dictate. With this flag, fd ensures that it does not descend into a
     /// different file system than the one it started in. Comparable to the -mount
